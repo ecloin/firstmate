@@ -214,6 +214,7 @@ The CLI matrix was checked directly:
 | Native state | `herdr agent get <pane>` | Working and done transitions were visible; native `busy` remains positive activity evidence, while native `idle` cannot close a turn and the adapter's semantic lifecycle decides worker state. |
 | Restart | guarded named-session stop then start | Workspace, tab, pane, and labels persisted; the agent process and registration did not. |
 | Close | `herdr pane close <pane> --session <name>` | The exact one-pane task tab closed; closing a final tab could remove the workspace. |
+| Agent sidebar name | `herdr agent rename <target> <name>` | Available from 0.7.4 (`herdr agent --help` lists `herdr agent rename <target> <name>|--clear`); a 0.8.x rename set the record's `name`, which then appeared in `herdr agent list` and in the sidebar. The same help text notes a target may be a unique agent name, so the adapter keeps addressing pane ids only. |
 
 All destructive verification used `bin/fm-herdr-lab.sh` with a non-default `fm-lab-` name and a byte-identical default-session tripwire.
 No ambient `herdr server stop` command is a supported test operation.

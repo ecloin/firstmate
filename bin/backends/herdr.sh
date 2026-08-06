@@ -1947,6 +1947,70 @@ fm_backend_herdr_agent_alive() {  # <target>
   esac
 }
 
+# --- agent naming: sidebar DECORATION ONLY -----------------------------------
+#
+# Herdr's agents sidebar lists each registered agent by the agent record's own
+# `name` field, which is separate from the fm-<id> TAB label, so without a name
+# every firstmate worker in the fleet reads as the same anonymous entry there.
+# `herdr agent rename <pane> <name>` sets that field and `--clear` removes it
+# (verified on herdr 0.8.x: the name comes back on `agent list`/`agent get` and
+# the sidebar renders it).
+#
+# Like the tab label and the presentation token (see this file's header), the
+# name never authorizes lookup, adoption, reuse, closure, task ownership, or
+# endpoint selection, and no code path reads it back for control flow. Recovery
+# and orphan discovery keep matching fm-<id> TAB labels through
+# fm_backend_herdr_list_live.
+#
+# That contract is ours to keep rather than Herdr's to enforce: `herdr agent
+# --help` states that a target may be "a unique agent name", so Herdr itself
+# would happily resolve one of these names as a selector, and two homes running
+# the same task id would make that selector ambiguous. Every adapter call
+# therefore keeps addressing the exact recorded pane id, never a name.
+#
+# FM_BACKEND_HERDR_NAME_ATTEMPTS / _INTERVAL bound the retry window below;
+# tests override them to keep the fail-open case fast.
+FM_BACKEND_HERDR_NAME_ATTEMPTS=${FM_BACKEND_HERDR_NAME_ATTEMPTS:-5}
+FM_BACKEND_HERDR_NAME_INTERVAL=${FM_BACKEND_HERDR_NAME_INTERVAL:-0.4}
+
+# fm_backend_herdr_agent_name: the sidebar name for <kind>'s <task-id>. A
+# secondmate gets the same 2ndmate-<id> form its home's own workspace already
+# carries (fm_backend_herdr_workspace_label); every other kind gets the fm-<id>
+# form its task tab is already labeled with.
+fm_backend_herdr_agent_name() {  # <kind> <task-id>
+  case "$1" in
+    secondmate) printf '2ndmate-%s' "$2" ;;
+    *) printf 'fm-%s' "$2" ;;
+  esac
+}
+
+# fm_backend_herdr_name_agent_best_effort: give <target>'s agent the sidebar
+# name <name>.
+#
+# The agent record exists only once the harness registers itself, which real
+# claude and codex were measured doing 90-490ms after the launch key lands
+# (docs/herdr-backend.md "Native agent-state submit confirmation"), so a rename
+# issued the instant firstmate presses Enter can legitimately lose that race.
+# Retry a BOUNDED number of times and then give up silently. A successful
+# rename is itself proof the agent had registered, so no separate presence
+# probe is needed.
+#
+# Always returns 0 and prints nothing: the name is cosmetic, and a spawn must
+# never fail, or stall past this bounded window, over it.
+fm_backend_herdr_name_agent_best_effort() {  # <target> <name>
+  local name=$2 attempts=$FM_BACKEND_HERDR_NAME_ATTEMPTS interval=$FM_BACKEND_HERDR_NAME_INTERVAL i
+  [ -n "$name" ] || return 0
+  fm_backend_herdr_parse_target "$1" || return 0
+  case "$attempts" in ''|*[!0-9]*|0) attempts=1 ;; esac
+  case "$interval" in ''|*[!0-9.]*) interval=0 ;; esac
+  for ((i = 0; i < attempts; i++)); do
+    [ "$i" -eq 0 ] || sleep "$interval"
+    fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" agent rename \
+      "$FM_BACKEND_HERDR_PANE" "$name" >/dev/null 2>&1 && return 0
+  done
+  return 0
+}
+
 # fm_backend_herdr_create_task: create the task's tab (one pane) in
 # <container> ("session:workspace_id"). Herdr does NOT enforce label
 # uniqueness itself (verified: two tabs can share a label), so the duplicate
