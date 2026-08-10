@@ -25,6 +25,12 @@
 #     state, source, detail, and raw line separately.
 #     paths.status_log.last_event is historical wake-event data only, never
 #     current state.
+#     paths.status_log.last_event_epoch and .age_seconds date that last append
+#     from the status file's modification time, so renderers can age a declared
+#     event without stat-ing state files themselves. Both are null when the file
+#     is absent or its time is unreadable, and age never goes negative.
+#     actions.review is the review command for a non-secondmate task
+#     (bin/fm-review-diff.sh, which owns base selection).
 #     hints.open_decisions is the keyed open-decision set returned by
 #     fm-classify-lib.sh's authoritative status_open_decisions fold and reconciled
 #     against current_state; hints.pending_decision and hints.blocked_event are
@@ -229,12 +235,21 @@ crew_state_json() {  # <id>
 }
 
 status_event_json() {  # <status-log>
-  local log=$1 present=0 raw='' verb='' note=''
+  local log=$1 present=0 raw='' verb='' note='' epoch='' age=''
   if [ -f "$log" ]; then
     present=1
     raw=$(last_nonempty_line "$log" || true)
     verb=$(status_line_verb "$raw")
     note=$(status_line_note "$raw")
+    # Append time, used by renderers to age a declared event. It is the file's
+    # modification time, so it dates the last append rather than verifying the
+    # work; a clock skew that would age an event negatively clamps to zero.
+    epoch=$(file_mtime_epoch "$log")
+    case "$epoch" in ''|*[!0-9]*) epoch='' ;; esac
+    if [ -n "$epoch" ]; then
+      age=$((SNAPSHOT_EPOCH - epoch))
+      [ "$age" -ge 0 ] || age=0
+    fi
   fi
   jq -n \
     --arg path "$log" \
@@ -242,7 +257,11 @@ status_event_json() {  # <status-log>
     --arg verb "$verb" \
     --arg note "$note" \
     --argjson present "$(bool_json "$present")" \
-    '{path:$path,present:$present,kind:"event_history",last_event:{state:$verb,note:$note,raw:$raw}}'
+    --argjson epoch "${epoch:-null}" \
+    --argjson age "${age:-null}" \
+    '{path:$path,present:$present,kind:"event_history",
+      last_event_epoch:$epoch,age_seconds:$age,
+      last_event:{state:$verb,note:$note,raw:$raw}}'
 }
 
 first_pr_url_in_file() {  # <file>
@@ -597,6 +616,7 @@ task_json_lines() {
           else
             {watch:"bin/fm-peek.sh fm-\($id)",
              steer:"bin/fm-send.sh fm-\($id) \u0027<instruction>\u0027",
+             review:"bin/fm-review-diff.sh \($id)",
              return_channel_note:null}
           end)
       }'

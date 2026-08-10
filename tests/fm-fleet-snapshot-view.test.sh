@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Behavior tests for the read-only fleet snapshot and its human renderer.
+# Behavior tests for the read-only fleet snapshot and its wide Markdown
+# rendering. The default captain sidebar is covered by tests/fm-fleet-view.test.sh.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -146,7 +147,7 @@ test_empty_fleet_json() {
       and .main_inventory.unstructured_current_count == 0
   ' >/dev/null \
     || fail "empty snapshot schema or absence markers wrong: $out"
-  view=$(FM_HOME="$home" "$VIEW")
+  view=$(FM_HOME="$home" "$VIEW" --wide)
   assert_contains "$view" "No live task metadata found." "empty fleet view should say no live metadata"
   pass "empty fleet snapshot and view use explicit absence markers"
 }
@@ -550,7 +551,7 @@ EOF
       and .paths.report.path == ($data + "/bold-task/report.md")
       and .paths.report.present == true
   ' >/dev/null || fail "bold task did not join to override-backed backlog and report"
-  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$data" FM_PROJECTS_OVERRIDE="$projects" "$VIEW")
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_DATA_OVERRIDE="$data" FM_PROJECTS_OVERRIDE="$projects" "$VIEW" --wide)
   assert_contains "$view" "| bold-task | done / status-log | scout | alpha | tmux | present | $data/bold-task/report.md" \
     "view should render bold in-flight row from snapshot"
   assert_contains "$view" "| blocked-reason | Blocked Reason | beta | ship | queued-comma - waits on queued-comma | - |" \
@@ -567,7 +568,7 @@ test_view_renders_snapshot() {
   home=$(make_home view)
   write_fixture "$home"
   fakebin=$(make_fakebin "$home")
-  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW" --wide)
   assert_contains "$view" "| ship-task | working / pane | ship | alpha | tmux | present | https://github.com/kunchenguid/firstmate/pull/9" \
     "view should render ship row from snapshot"
   assert_contains "$view" "| queued-task | Queued Task | alpha | ship | ship-task | -" \
@@ -596,7 +597,7 @@ test_view_renders_dead_secondmate_agent_status() {
     "projects=alpha, beta"
   printf 'working: watching delegated scope\n' > "$home/state/dead-secondmate.status"
   fakebin=$(make_fakebin "$home")
-  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW")
+  view=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$VIEW" --wide)
   assert_contains "$view" "| dead-secondmate | unknown / none | secondmate | $home/secondmate-home | tmux | present / dead |" \
     "view should distinguish a present secondmate endpoint from a dead agent"
   assert_contains "$view" "| dead-secondmate | unknown / none | secondmate | $home/secondmate-home | tmux | present / dead | - | $home/secondmate-home (absent) |" \
