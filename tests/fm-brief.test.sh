@@ -358,8 +358,11 @@ test_no_mistakes_dod_wording() {
 # so that whole contract must be generated rather than hand-built per task: the
 # four ways a hand-built command broke (full-changeset diffs, moving compare refs
 # that rot into an empty diff, invalid two-ref forms, and a marker stranded by a
-# rebase) each have a line here. direct-PR and no-mistakes work is reviewed on its
-# forge instead, so those scaffolds - and scout/secondmate - must stay clear of it.
+# rebase) each have a line here. So does the fifth way a marker loses review
+# coverage: only a review-pass verdict may advance it, because moving it on an
+# inline comment mid-pass silently drops the rest of that pass out of the next
+# diff. direct-PR and no-mistakes work is reviewed on its forge instead, so those
+# scaffolds - and scout/secondmate - must stay clear of the whole contract.
 test_local_only_review_marker_contract() {
   local home id brief other
   home="$TMP_ROOT/review-marker-home"
@@ -387,8 +390,18 @@ test_local_only_review_marker_contract() {
     "review marker contract did not rule out the invalid two-ref command form"
   assert_grep "Record your branch tip (\`git rev-parse HEAD\`) every time you report ready" "$brief" \
     "review marker contract did not have the worker record the reported tip"
-  assert_grep "FIRST advance the marker to that recorded sha with \`git tag -f $id-reviewed <recorded-sha>\`" "$brief" \
-    "review marker contract did not advance the marker before addressing feedback"
+  assert_grep "Only a review-pass VERDICT moves the marker" "$brief" \
+    "review marker contract did not gate the marker on a review-pass verdict"
+  assert_grep "the reviewer's approval of that pass, or a batch of change requests handed back to you as that pass's outcome" "$brief" \
+    "review marker contract did not define what counts as a verdict"
+  assert_grep "On such a verdict, FIRST advance the marker to that pass's recorded sha with \`git tag -f $id-reviewed <recorded-sha>\`" "$brief" \
+    "review marker contract did not advance the marker on a verdict before addressing feedback"
+  assert_grep "Individual inline comments and questions arriving while the review pass is still live are NOT a verdict, so leave the marker exactly where it is." "$brief" \
+    "review marker contract did not keep the marker still for mid-pass inline notes"
+  assert_grep "hunk session comment add --repo . --file <path> --new-line <n> --summary <your answer>" "$brief" \
+    "review marker contract did not have the worker answer mid-pass notes inline"
+  assert_grep "Advancing the marker mid-pass would drop the rest of that pass's still-unreviewed changes out of the reviewer's next diff." "$brief" \
+    "review marker contract did not explain why a mid-pass move loses review coverage"
   assert_grep "Never advance the marker to a tip the reviewer has not seen" "$brief" \
     "review marker contract did not forbid advancing past unreviewed content"
   assert_grep "After ANY rebase or history rewrite" "$brief" \
