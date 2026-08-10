@@ -354,6 +354,74 @@ test_no_mistakes_dod_wording() {
   pass "fm-brief.sh: no-mistakes DOD keeps its apostrophe prose, now parse-safe"
 }
 
+# Local-only work is reviewed as a since-last-review diff against a pinned tag,
+# so that whole contract must be generated rather than hand-built per task: the
+# four ways a hand-built command broke (full-changeset diffs, moving compare refs
+# that rot into an empty diff, invalid two-ref forms, and a marker stranded by a
+# rebase) each have a line here. direct-PR and no-mistakes work is reviewed on its
+# forge instead, so those scaffolds - and scout/secondmate - must stay clear of it.
+test_local_only_review_marker_contract() {
+  local home id brief other
+  home="$TMP_ROOT/review-marker-home"
+  mkdir -p "$home/data"
+  id="brief-review-marker-e1"
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode local-only >/dev/null 2>&1 \
+    || fail "local-only brief with the review marker contract should scaffold"
+  brief="$home/data/$id/brief.md"
+  assert_grep "# Review marker contract" "$brief" \
+    "local-only brief lost the review marker contract section"
+  assert_grep "git rev-parse -q --verify refs/tags/$id-reviewed" "$brief" \
+    "review marker contract did not have the worker check for an existing marker first"
+  # shellcheck disable=SC2016  # the literal $(...) must reach the worker unexpanded
+  assert_grep "git tag $id-reviewed \"\$(git merge-base main HEAD)\"" "$brief" \
+    "review marker contract did not pin a missing marker at the merge-base commit"
+  assert_grep "never a moving ref such as \`main\` or a branch name" "$brief" \
+    "review marker contract did not forbid a moving compare ref"
+  assert_grep "a moving ref catches up with your branch tip and the review then shows an empty diff" "$brief" \
+    "review marker contract did not explain how a moving ref rots"
+  assert_grep "\`cd <worktree> && hunk diff $id-reviewed\`" "$brief" \
+    "review marker contract did not render the exact runnable review command"
+  assert_grep "replaced by this worktree's real absolute path from \`pwd -P\`" "$brief" \
+    "review marker contract did not require a real absolute worktree path"
+  assert_grep "takes ONE base ref and diffs it against the working tree, so a two-ref form is invalid" "$brief" \
+    "review marker contract did not rule out the invalid two-ref command form"
+  assert_grep "Record your branch tip (\`git rev-parse HEAD\`) every time you report ready" "$brief" \
+    "review marker contract did not have the worker record the reported tip"
+  assert_grep "FIRST advance the marker to that recorded sha with \`git tag -f $id-reviewed <recorded-sha>\`" "$brief" \
+    "review marker contract did not advance the marker before addressing feedback"
+  assert_grep "Never advance the marker to a tip the reviewer has not seen" "$brief" \
+    "review marker contract did not forbid advancing past unreviewed content"
+  assert_grep "After ANY rebase or history rewrite" "$brief" \
+    "review marker contract did not handle a rewritten history stranding the marker"
+  assert_grep "re-point the marker to the current merge-base instead" "$brief" \
+    "review marker contract did not resolve an ambiguous rebase mapping safely"
+  assert_grep "Always fail toward showing already-reviewed changes again, never toward hiding unreviewed ones." "$brief" \
+    "review marker contract lost its direction-of-safety rule"
+  assert_grep "hunk session comment list --repo . --type user" "$brief" \
+    "review marker contract did not have the worker read live inline review notes"
+  assert_grep "Never run the interactive hunk commands (\`hunk diff\`, \`hunk show\`) yourself" "$brief" \
+    "review marker contract did not keep interactive review commands out of worker hands"
+  assert_grep "create or move ONLY the exact \`$id-reviewed\` tag and never create, move, or delete any other tag" "$brief" \
+    "review marker contract did not confine tag writes to this task's own marker"
+
+  # Forge-reviewed ship modes and the non-ship scaffolds carry no marker contract.
+  for other in no-mistakes direct-PR; do
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "brief-review-marker-$other" some-proj --mode "$other" >/dev/null 2>&1
+    assert_no_grep "# Review marker contract" "$home/data/brief-review-marker-$other/brief.md" \
+      "$other brief must not carry the local-only review marker contract"
+    assert_no_grep "-reviewed" "$home/data/brief-review-marker-$other/brief.md" \
+      "$other brief must not mention a review marker tag"
+  done
+  FM_HOME="$home" "$ROOT/bin/fm-brief.sh" brief-review-marker-scout some-proj --scout >/dev/null 2>&1
+  assert_no_grep "# Review marker contract" "$home/data/brief-review-marker-scout/brief.md" \
+    "scout brief must not carry the review marker contract"
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='domain work' \
+    "$ROOT/bin/fm-brief.sh" brief-review-marker-sm --secondmate --no-projects >/dev/null 2>&1
+  assert_no_grep "# Review marker contract" "$home/data/brief-review-marker-sm/brief.md" \
+    "secondmate charter must not carry the review marker contract"
+  pass "fm-brief.sh: local-only briefs carry the complete since-last-review marker contract"
+}
+
 test_ship_project_memory_wording() {
   local home id brief
   home="$TMP_ROOT/project-memory-home"
@@ -719,6 +787,7 @@ test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
 test_faster_paths_use_configured_authority_without_stacked_review
 test_no_mistakes_dod_wording
+test_local_only_review_marker_contract
 test_ship_project_memory_wording
 test_herdr_lab_contract_is_explicit_and_complete
 test_herdr_lab_contract_quotes_foreign_firstmate_path

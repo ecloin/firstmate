@@ -49,6 +49,12 @@
 #   (w) index.lock mtime read failure                         -> lock kept, REFUSE
 #   (x) transient lock cleared after first failed return      -> retry ALLOW
 #   (y) persistent lock (never clears, not provably stale)    -> REFUSE loudly
+#
+# Also covers review-marker cleanup for the since-last-review contract that
+# bin/fm-brief.sh generates into local-only briefs:
+#   (z1) marker tag present, work landed -> only that tag removed, others kept
+#   (z2) no marker tag at all            -> silent, no diagnostic, teardown completes
+#   (z3) refused teardown                -> marker kept (nothing retires before safety)
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -629,6 +635,84 @@ test_local_only_truly_unpushed_refuses() {
   expect_code 1 "$rc" "truly-unpushed: teardown should refuse"
   grep -q REFUSED "$case_dir/stderr" || fail "truly-unpushed: no REFUSED line in stderr"
   pass "local-only worktree with truly unpushed work is refused (safety preserved)"
+}
+
+# The local-only review-marker contract (bin/fm-brief.sh) has the worker pin a
+# `<task-id>-reviewed` tag in the shared project clone as the reviewer's
+# since-last-review base. Cleanup retires exactly that ref once the work has
+# landed; every other tag in the clone, including another task's marker, is none
+# of teardown's business.
+test_review_marker_tag_is_removed_when_present() {
+  local case_dir rc
+  case_dir=$(make_case review-marker-present)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "reviewed work"
+  add_fork_with_pushed_branch "$case_dir"
+  git -C "$case_dir/project" tag task-x1-reviewed main
+  git -C "$case_dir/project" tag v1.0.0 main
+  git -C "$case_dir/project" tag other-task-reviewed main
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "review-marker-present: teardown should succeed for landed local-only work"
+  if git -C "$case_dir/project" rev-parse -q --verify refs/tags/task-x1-reviewed >/dev/null 2>&1; then
+    fail "review-marker-present: the task's review marker survived teardown"
+  fi
+  git -C "$case_dir/project" rev-parse -q --verify refs/tags/v1.0.0 >/dev/null 2>&1 \
+    || fail "review-marker-present: teardown deleted an unrelated project tag"
+  git -C "$case_dir/project" rev-parse -q --verify refs/tags/other-task-reviewed >/dev/null 2>&1 \
+    || fail "review-marker-present: teardown deleted another task's review marker"
+  pass "teardown removes exactly the task's review marker tag and leaves other tags alone"
+}
+
+# A task that never created a marker - any forge-reviewed mode, or local-only work
+# torn down before a first review - must tear down exactly as before: no error, no
+# diagnostic, no mention of a marker.
+test_review_marker_absent_is_silent() {
+  local case_dir rc
+  case_dir=$(make_case review-marker-absent)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "reviewed work"
+  add_fork_with_pushed_branch "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "review-marker-absent: a missing review marker must not fail teardown"
+  assert_grep "teardown task-x1 complete" "$case_dir/stdout" \
+    "review-marker-absent: teardown did not complete"
+  assert_no_grep "-reviewed" "$case_dir/stderr" \
+    "review-marker-absent: teardown complained about a marker that never existed"
+  assert_no_grep "-reviewed" "$case_dir/stdout" \
+    "review-marker-absent: teardown mentioned a marker that never existed"
+  pass "teardown is silent when the task never pinned a review marker"
+}
+
+# Ordering: the marker is a durable record of the task, so nothing may retire it
+# before the landed-work checks pass. A refused teardown must leave it exactly
+# where it was, ready for the rerun after the work actually lands.
+test_review_marker_tag_survives_refused_teardown() {
+  local case_dir rc
+  case_dir=$(make_case review-marker-refused)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "unpushed work"
+  git -C "$case_dir/project" tag task-x1-reviewed main
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "review-marker-refused: unlanded work must still refuse"
+  grep -q REFUSED "$case_dir/stderr" || fail "review-marker-refused: no REFUSED line in stderr"
+  git -C "$case_dir/project" rev-parse -q --verify refs/tags/task-x1-reviewed >/dev/null 2>&1 \
+    || fail "review-marker-refused: a refused teardown removed the review marker anyway"
+  pass "a refused teardown leaves the review marker in place (safety ordering preserved)"
 }
 
 test_local_only_merged_to_local_main_allows() {
@@ -2599,6 +2683,9 @@ test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
+test_review_marker_tag_is_removed_when_present
+test_review_marker_absent_is_silent
+test_review_marker_tag_survives_refused_teardown
 test_teardown_missing_busy_sidecar_completes
 test_herdr_teardown_clears_escalation_marker
 test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes

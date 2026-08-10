@@ -36,6 +36,15 @@
 #                the configured merge authority approves, firstmate merges to local main
 # no-mistakes-prod-only is a registry policy, not a task mode; resolve it to one of
 # the three concrete modes at intake before calling this script.
+# Only the local-only definition of done carries the review-marker contract, because
+# direct-PR and no-mistakes work is reviewed on its forge instead: the worker keeps a
+# pinned git tag <task-id>-reviewed as the since-last-review base, and ends every
+# ready report with the exact single-base command:
+#   cd <worktree> && hunk diff <task-id>-reviewed
+# The worker advances that marker only to a tip the reviewer has already seen, and
+# re-points it after any rebase or history rewrite (to the current merge-base when the
+# mapping is ambiguous, so already-reviewed changes reappear rather than unreviewed ones
+# hiding). bin/fm-teardown.sh deletes that one tag when the task is cleaned up.
 # The generated ship brief records the chosen mode as a fixed machine-readable
 # "Delivery contract: mode=<mode>" line. bin/fm-spawn.sh reads that line and refuses
 # to launch a ship task whose explicit --mode disagrees, so an adjusted brief and the
@@ -375,6 +384,23 @@ The task is complete only when committed on your branch \`fm/$ID\`. Do NOT push,
 Keep your branch a clean fast-forward onto the current default branch - if \`main\` has advanced, rebase onto it so the eventual merge stays a fast-forward.
 When it is implemented and committed, append \`done: ready in branch fm/$ID\` to the status file and stop.
 The configured merge authority approves the ready branch, then firstmate merges it into local \`main\` through the guarded fast-forward path.
+
+# Review marker contract
+This branch is reviewed as a since-last-review diff, so the review marker below must always point at the last content the reviewer has already seen.
+Before you first report ready, make sure the git tag \`$ID-reviewed\` exists: if \`git rev-parse -q --verify refs/tags/$ID-reviewed\` finds nothing, create it at the pinned merge-base commit with \`git tag $ID-reviewed "\$(git merge-base main HEAD)"\` (substitute the repo's real default branch when it is not \`main\`).
+The marker must always name that resolved commit, never a moving ref such as \`main\` or a branch name: a moving ref catches up with your branch tip and the review then shows an empty diff.
+Your ready report is the message you end on when you stop, and its final line must be exactly this runnable command, with \`<worktree>\` replaced by this worktree's real absolute path from \`pwd -P\`:
+\`cd <worktree> && hunk diff $ID-reviewed\`
+That command takes ONE base ref and diffs it against the working tree, so a two-ref form is invalid; never write one.
+Record your branch tip (\`git rev-parse HEAD\`) every time you report ready, because that recorded sha is the content being reviewed.
+When review feedback arrives, FIRST advance the marker to that recorded sha with \`git tag -f $ID-reviewed <recorded-sha>\`, THEN address the feedback, then re-report ready with the same command.
+Never advance the marker to a tip the reviewer has not seen, because that hides unreviewed changes from the next review.
+After ANY rebase or history rewrite the marker points at commits your branch no longer contains, so re-point it in the same pass with \`git tag -f $ID-reviewed <rebased commit holding the last reviewed content>\`.
+When that mapping is ambiguous, re-point the marker to the current merge-base instead.
+Always fail toward showing already-reviewed changes again, never toward hiding unreviewed ones.
+When the reviewer's hunk session is live, read the inline notes with \`hunk session comment list --repo . --type user\` and address them.
+Never run the interactive hunk commands (\`hunk diff\`, \`hunk show\`) yourself; they are the reviewer's surface, not a worker tool.
+The tag lives in the shared project clone, so create or move ONLY the exact \`$ID-reviewed\` tag and never create, move, or delete any other tag.
 EOF
     ;;
   *)  # no-mistakes
