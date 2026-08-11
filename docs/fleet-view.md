@@ -35,6 +35,18 @@ wezterm cli split-pane --right --percent 30 -- \
 
 Each redraw takes a fresh snapshot of the whole home, so prefer a calm interval over a tight one on a busy fleet.
 
+## What an entry looks like
+
+Every entry in every section is a glance, not a record.
+An entry headline is the work item number plus the first sentence of its title, clipped to about two wrapped lines and closed with a single `…` whenever anything was dropped.
+That matters because a real backlog title is a body rather than a label: it accumulates pull request verdicts, finding lists, and file paths, and one unclipped title fills a narrow pane and pushes everything below it off screen.
+No section ever renders a note body, a verdict list, findings, or a raw worker report.
+
+The action line under an entry is the exception and is never clipped.
+A pull request URL or a review command goes out whole and soft-wraps if it has to, because a truncated command is worse to receive than a long one.
+
+`--wide` and `--json` are unaffected: both are whole-fleet reads rather than a narrow pane, so they carry titles in full.
+
 ## What the sections mean
 
 `NEEDS YOU` is the only section that asks for anything.

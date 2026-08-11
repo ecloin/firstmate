@@ -172,6 +172,78 @@ EOF
   pass "needs-you covers open decisions, PR merge word, local-only review, and a gone worker"
 }
 
+# A real backlog title is a body, not a label. This one reproduces the live
+# 2026-08-11 render, where a single needs-you entry printed its whole title -
+# a status dump of PR verdicts, findings, and file paths - and pushed every
+# later entry off a short pane.
+LONG_TITLE='review pr2909 add po to ap. VERDICT: pass with 4 findings; finding 1: bin/fm-fleet-view.sh line 168 renders the full backlog title; finding 2: docs/fleet-view.md does not describe the entry format; finding 3: tests/fm-fleet-view.test.sh has no long-title fixture; finding 4: state/2909.status carries the verdict body verbatim. Reviewed heads: 3f1a2b9 against origin/main, checks green, awaiting merge word from the captain.'
+
+test_long_title_stays_glanceable() {
+  local home out over
+  home=$(make_home longtitle)
+  {
+    printf '## In flight\n'
+    printf -- '- [ ] 2909 - %s (repo: alpha) (kind: ship) (since 2026-08-11)\n' "$LONG_TITLE"
+    printf -- '- [ ] 7002 - vault sync (repo: alpha) (kind: ship) (since 2026-08-11)\n'
+  } > "$home/data/backlog.md"
+  add_task "$home" 2909 ship ship 'done: PR is up' \
+    "pr=https://github.com/ecloin/firstmate/pull/2909"
+  add_task "$home" 7002 local-only ship 'done: ready branch'
+  record_idle "$home" 2909
+  record_idle "$home" 7002
+
+  out=$(view "$home" | unwrap)
+  assert_contains "$out" "NEEDS YOU (2)" "both finished tasks are waiting on the captain"
+
+  # Every entry headline stays within the renderer's cap, which is about two
+  # wrapped lines at this pane width. The two-character section glyph and its
+  # space are the only allowance on top of it.
+  over=$(printf '%s\n' "$out" | grep '^[●◐○✓] ' | jq -Rr 'select(length > 84) | "\(length): \(.)"')
+  [ -z "$over" ] || fail "an entry headline must stay within the sidebar cap: $over"
+
+  assert_contains "$out" "PR #2909 review pr2909 add po to ap…" \
+    "a long title should clip to its first sentence with a single ellipsis"
+  assert_not_contains "$out" "VERDICT" "a verdict body must never reach the sidebar"
+  assert_not_contains "$out" "finding 2" "a finding list must never reach the sidebar"
+  assert_not_contains "$out" "bin/fm-fleet-view.sh" "a file path from a title must never reach the sidebar"
+
+  assert_contains "$out" "7002 vault sync" \
+    "a clipped first entry must leave the second needs-you entry on the pane"
+
+  # The action line is deliberately outside every budget: a clipped command is
+  # worse than a long one, so both survive whole and unwrapped.
+  assert_contains "$out" "https://github.com/ecloin/firstmate/pull/2909" \
+    "a PR URL must survive unclipped even when the entry was clipped"
+  assert_contains "$out" "bin/fm-review-diff.sh 7002" \
+    "a review command must survive unclipped"
+  pass "a multi-hundred-character title clips to a glanceable entry without hiding the next one"
+}
+
+test_long_title_clipping_covers_every_section() {
+  local home out over
+  home=$(make_home longtitle-sections)
+  {
+    printf '## In flight\n'
+    printf -- '- [ ] 3406 - %s (repo: alpha) (kind: ship) (since 2026-08-11)\n' "$LONG_TITLE"
+    printf -- '- [ ] 7001 - %s (repo: alpha) (kind: ship) (since 2026-08-11)\n' "$LONG_TITLE"
+    printf '## Done\n'
+    printf -- '- [x] 3410 - %s (repo: alpha) (kind: ship) (merged %s)\n' "$LONG_TITLE" "$TODAY"
+  } > "$home/data/backlog.md"
+  add_task "$home" 3406 ship ship 'working: rebasing onto the new base'
+  add_task "$home" 7001 ship ship 'paused: upstream release lands Thursday'
+  record_busy "$home" 3406
+  record_idle "$home" 7001
+
+  out=$(view "$home" | unwrap)
+  assert_contains "$out" "IN FLIGHT (1)" "the working task belongs in flight"
+  assert_contains "$out" "WAITING (1)" "the declared wait belongs in waiting"
+  assert_contains "$out" "DONE TODAY (1)" "the landed work belongs in done today"
+  over=$(printf '%s\n' "$out" | grep '^[●◐○✓] ' | jq -Rr 'select(length > 84) | "\(length): \(.)"')
+  [ -z "$over" ] || fail "every section must clip its entries, not only NEEDS YOU: $over"
+  assert_not_contains "$out" "VERDICT" "no section may render a verdict body"
+  pass "in-flight, waiting, and done-today entries clip the same way as needs-you"
+}
+
 test_in_flight_shows_age() {
   local home out
   home=$(make_home flight)
@@ -313,6 +385,8 @@ EOF
 test_empty_fleet_is_all_quiet
 test_needs_you_classification
 test_narrow_pane_never_overflows
+test_long_title_stays_glanceable
+test_long_title_clipping_covers_every_section
 test_in_flight_shows_age
 test_paused_and_scout_wait
 test_done_today_filters_by_date
