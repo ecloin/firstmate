@@ -80,6 +80,16 @@ C_WAIT='2'
 C_DONE='2'
 C_WARN='31'
 
+# Clip budgets in codepoints, not bytes, for the sidebar's glance surface.
+# A real backlog title carries a whole body - PR verdicts, finding lists, file
+# paths - so an entry keeps only the title's first sentence within TITLE_CAP,
+# any note within NOTE_CAP, and the assembled headline within HEADLINE_CAP,
+# which is about two wrapped lines at the default pane width. An action line is
+# deliberately outside every budget: a clipped command is worse than a long one.
+TITLE_CAP=48
+NOTE_CAP=56
+HEADLINE_CAP=80
+
 resolve_width() {
   local w=${FM_FLEET_VIEW_WIDTH:-}
   if [ -z "$w" ] && [ -t 1 ]; then w=$(tput cols 2>/dev/null || true); fi
@@ -165,7 +175,20 @@ CLASSIFY='
     elif $s < 3600 then "\(($s / 60) | floor)m"
     elif $s < 86400 then "\(($s / 3600) | floor)h"
     else "\(($s / 86400) | floor)d" end;
-  def short($t): ($t.backlog.title // "") | clean;
+  # A backlog title is a body, not a label: in a real home it carries PR
+  # verdicts, finding lists, and file paths. An entry keeps only the first
+  # sentence of a title - up to the first ".", ";", or newline - within the title
+  # budget, and says so with a single ellipsis whenever anything was dropped.
+  def clip($raw):
+    ($raw | tostring) as $text
+    | ($text | clean) as $full
+    | ((($text | [splits("[.;\r\n]")])[0] // "") | clean) as $head
+    | (if $head == "" then $full else $head end) as $s
+    | ($s | cap($title_cap)) as $capped
+    | if $capped != $s then $capped
+      elif $s != $full then "\($s)…"
+      else $s end;
+  def short($t): clip($t.backlog.title // "");
   def name($t):
     short($t) as $s
     | if $s == "" then ($t.id | tostring) else "\($t.id) \($s)" end;
@@ -180,13 +203,17 @@ CLASSIFY='
   def decision_line($t):
     (decisions($t)) as $d
     | ($d | map(select(.verb == "blocked")) | first) as $blocked
-    | (($blocked // $d[0]).summary | clean | unkey | cap(90)) as $note
+    | (($blocked // $d[0]).summary | clean | unkey | cap($note_cap)) as $note
     | if $blocked != null then
         (if $note == "" then "blocked, needs your help" else "blocked: \($note)" end)
       else
         (if $note == "" then "a decision is waiting on you" else "decision: \($note)" end)
       end;
-  def row($section; $headline; $action): "\($section)\t\($headline | clean)\t\($action | clean)";
+  # The headline is bounded whatever it was assembled from, so N entries always
+  # cost about N * 3 lines and the second needs-you entry is never pushed off a
+  # short pane. The action stays whole: the captain copies it.
+  def row($section; $headline; $action):
+    "\($section)\t\($headline | clean | cap($headline_cap))\t\($action | clean)";
 
   ([.tasks[]?
     | . as $t
@@ -219,7 +246,7 @@ CLASSIFY='
       elif $terminal then
         row("WAIT"; "\(name($t)) — finished, wrapping up"; "")
       elif $state == "paused" then
-        ((($t.hints.last_event_text | clean | sub("^[a-z-]+: *"; "") | unkey | cap(70))) as $why
+        ((($t.hints.last_event_text | clean | sub("^[a-z-]+: *"; "") | unkey | cap($note_cap))) as $why
          | row("WAIT"; "\(name($t)) — \(if $why == "" then "waiting on something outside" else $why end)"; ""))
       elif $state == "working" then
         row("FLIGHT"; "\(name($t)) — working \(age($t))"; "")
@@ -231,14 +258,16 @@ CLASSIFY='
    [.backlog.records[]?
     | select(.structured == true and .state == "done")
     | select(((.completion.date // "") | clean) == $today)
-    | row("DONE"; "\(.id) \(.title | clean)"; "")
+    | row("DONE"; "\(.id) \(clip(.title // ""))"; "")
    ])[]
 '
 
 render_sidebar() {  # <snapshot-json>
   local snapshot=$1 records live needs today
   today=${FM_FLEET_VIEW_TODAY:-$(date +%F)}
-  records=$(printf '%s' "$snapshot" | jq -r --arg today "$today" "$CLASSIFY" 2>/dev/null) || records=''
+  records=$(printf '%s' "$snapshot" | jq -r --arg today "$today" \
+    --argjson title_cap "$TITLE_CAP" --argjson note_cap "$NOTE_CAP" \
+    --argjson headline_cap "$HEADLINE_CAP" "$CLASSIFY" 2>/dev/null) || records=''
 
   live=$(printf '%s' "$records" | grep -c -v '^DONE	' 2>/dev/null || true)
   [ -n "$records" ] || live=0
