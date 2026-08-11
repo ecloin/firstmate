@@ -63,6 +63,9 @@ Avoid naming a personal workspace `firstmate` or `2ndmate-<id>` for that reason,
 An older secondmate workspace using `firstmate-<id>` is not migrated automatically; rename it manually before expecting new tasks or recovery to use it.
 Recovery and list-live still scan the first workspace matching the home label, because they address panes they already recorded rather than choosing where new work goes.
 
+After the launch key lands, a spawn also gives the worker's Herdr agent record the sidebar name `fm-<task-id>`, or `2ndmate-<secondmate-id>` for a secondmate, so the agents sidebar distinguishes workers instead of listing them all identically.
+That name is decoration on a bounded best-effort call: it never fails a spawn, and nothing reads it back for identity, lookup, or targeting.
+
 Existing task operations use recorded endpoint ids and do not move a live task when labels change.
 The per-home workspace is reused while it has task tabs.
 Closing its last tab can remove the workspace, and the next spawn recreates it.

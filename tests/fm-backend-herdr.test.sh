@@ -4198,6 +4198,199 @@ test_wait_transition_clean_timeout_returns_1() {
   pass "fm_backend_herdr_wait_transition: stock macOS Bash clean timeout closes fd 9 and returns 1"
 }
 
+# --- agent naming: per-task sidebar decoration, never identity ---------------
+
+# rename_calls <log> -> the `agent rename` invocations the adapter made, one
+# unit-separated line each.
+rename_calls() {  # <log>
+  grep -F $'\x1f''agent'$'\x1f''rename' "$1" || true
+}
+
+test_agent_name_uses_the_task_tab_form_for_workers() {
+  local name
+  name=$(bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_agent_name crewmate herdr-agent-names' "$ROOT")
+  [ "$name" = "fm-herdr-agent-names" ] || fail "a crewmate's sidebar name should be fm-<id>, got '$name'"
+  name=$(bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_agent_name scout probe-1' "$ROOT")
+  [ "$name" = "fm-probe-1" ] || fail "a scout's sidebar name should be fm-<id>, got '$name'"
+  pass "fm_backend_herdr_agent_name: crewmates and scouts are named after their fm-<id> task tab"
+}
+
+test_agent_name_uses_the_home_form_for_a_secondmate() {
+  local name
+  name=$(bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_agent_name secondmate design' "$ROOT")
+  [ "$name" = "2ndmate-design" ] || fail "a secondmate's sidebar name should match its home workspace label form, got '$name'"
+  pass "fm_backend_herdr_agent_name: a secondmate carries the same 2ndmate-<id> form as its home workspace"
+}
+
+test_name_agent_renames_the_exact_pane_once_when_the_agent_is_registered() {
+  local dir log resp fb calls
+  dir="$TMP_ROOT/name-agent-ok"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    FM_BACKEND_HERDR_NAME_INTERVAL=0 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_name_agent_best_effort sess:w1:p2 fm-task-a' "$ROOT"
+  expect_code 0 $? "naming an agent must always report success"
+  calls=$(rename_calls "$log")
+  [ "$(printf '%s\n' "$calls" | grep -c .)" = 1 ] \
+    || fail "a rename that lands first try must not be repeated, got: $calls"
+  assert_contains "$calls" $'\x1f''agent'$'\x1f''rename'$'\x1f''w1:p2'$'\x1f''fm-task-a' \
+    "the rename did not target the task's exact pane with its task name"
+  assert_contains "$calls" 'HERDR_SESSION=sess' "the rename was not scoped to the task's own herdr session"
+  pass "fm_backend_herdr_name_agent_best_effort: one session-scoped rename of the task's exact pane"
+}
+
+test_name_agent_retries_until_the_harness_registers_its_agent() {
+  local dir log resp fb calls
+  dir="$TMP_ROOT/name-agent-race"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  # The agent record does not exist yet for the first two attempts, exactly as
+  # it does not for the first few hundred ms after the launch key lands.
+  printf '1\n' > "$resp/1.exit"
+  printf '1\n' > "$resp/2.exit"
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    FM_BACKEND_HERDR_NAME_INTERVAL=0 FM_BACKEND_HERDR_NAME_ATTEMPTS=5 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_name_agent_best_effort sess:w1:p2 fm-task-b' "$ROOT"
+  expect_code 0 $? "naming an agent must always report success"
+  calls=$(rename_calls "$log")
+  [ "$(printf '%s\n' "$calls" | grep -c .)" = 3 ] \
+    || fail "the rename should retry past a not-yet-registered agent and stop on the first success, got: $calls"
+  pass "fm_backend_herdr_name_agent_best_effort: retries past the agent-registration race, then stops"
+}
+
+test_name_agent_gives_up_silently_within_a_bounded_window() {
+  local dir log resp fb out calls i
+  dir="$TMP_ROOT/name-agent-fail"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  for i in 1 2 3 4 5 6; do printf '1\n' > "$resp/$i.exit"; done
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    FM_BACKEND_HERDR_NAME_INTERVAL=0 FM_BACKEND_HERDR_NAME_ATTEMPTS=3 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_name_agent_best_effort sess:w1:p2 fm-task-c' "$ROOT" 2>&1)
+  expect_code 0 $? "a rename that never lands must still report success"
+  [ -z "$out" ] || fail "a failed rename must stay silent, got: $out"
+  calls=$(rename_calls "$log")
+  [ "$(printf '%s\n' "$calls" | grep -c .)" = 3 ] \
+    || fail "a never-landing rename must stop at its configured attempt budget, got: $calls"
+  pass "fm_backend_herdr_name_agent_best_effort: a rename that never lands gives up silently inside its bounded budget"
+}
+
+test_name_agent_refuses_an_unparseable_target_or_empty_name() {
+  local dir log resp fb
+  dir="$TMP_ROOT/name-agent-guards"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  fb=$(make_herdr_fakebin "$dir")
+  PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_BACKEND_HERDR_NAME_INTERVAL=0 \
+    bash -c '. "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_name_agent_best_effort nocolon fm-task-d || exit 1
+      fm_backend_herdr_name_agent_best_effort sess:w1:p2 "" || exit 1' "$ROOT"
+  expect_code 0 $? "the naming guards must still report success"
+  [ -z "$(rename_calls "$log")" ] || fail "an unparseable target or an empty name must issue no rename at all"
+  pass "fm_backend_herdr_name_agent_best_effort: no rename for an unparseable target or an empty name"
+}
+
+# make_herdr_spawnfake: a `herdr` stub answering exactly the calls one flat
+# (unprojected) crewmate spawn makes, so the REAL bin/fm-spawn.sh can be driven
+# end to end. The home workspace is pre-seeded (label from FM_FAKE_WS_LABEL) so
+# the run adopts it instead of creating one, `pane get` reports
+# FM_FAKE_PANE_PATH as the settled foreground cwd for the worktree-detection
+# poll, and `agent rename` exits FM_FAKE_RENAME_EXIT so a spawn can be replayed
+# against a rename that never lands.
+make_herdr_spawnfake() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+LOG="${FM_HERDR_LOG:?}"
+{
+  printf 'HERDR_SESSION=%s' "${HERDR_SESSION:-}"
+  for a in "$@"; do printf '\x1f%s' "$a"; done
+  printf '\n'
+} >> "$LOG"
+case "${1:-} ${2:-}" in
+  "status --json")
+    printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n' ;;
+  "workspace list")
+    printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"%s"}]}}\n' "${FM_FAKE_WS_LABEL:?}" ;;
+  "tab list")
+    printf '{"result":{"tabs":[]}}\n' ;;
+  "tab create")
+    printf '{"result":{"tab":{"tab_id":"w1:t2"},"root_pane":{"pane_id":"w1:p2"}}}\n' ;;
+  "pane get")
+    printf '{"result":{"pane":{"pane_id":"w1:p2","pid":4242,"cwd":"%s","foreground_cwd":"%s"}}}\n' \
+      "${FM_FAKE_PANE_PATH:-}" "${FM_FAKE_PANE_PATH:-}" ;;
+  "agent get")
+    printf '{"error":{"code":"agent_not_found","message":"no agent"}}\n' ;;
+  "agent rename")
+    exit "${FM_FAKE_RENAME_EXIT:-0}" ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/herdr"
+  fm_fake_exit0 "$fb" treehouse gh gh-axi
+  printf '%s\n' "$fb"
+}
+
+# run_herdr_spawn <case-name> -> echoes "<log>|<spawn stdout+stderr>|<rc>";
+# drives the real bin/fm-spawn.sh for one crewmate on the herdr backend.
+run_herdr_spawn() {  # <case-name> [<rename-exit>]
+  local name=$1 rename_exit=${2:-0} dir home proj wt fb log id out rc
+  dir="$TMP_ROOT/$name"; home="$dir/home"; proj="$dir/project"; wt="$dir/wt"
+  id="spawnname-$name"
+  mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config"
+  printf 'brief\n' > "$home/data/$id/brief.md"
+  # Force the flat per-home workspace path so this case never depends on the
+  # projection's own version floor or focus handling.
+  printf 'off\n' > "$home/config/herdr-presentation-spaces"
+  touch "$home/state/.last-watcher-beat"
+  fm_git_worktree "$proj" "$wt" "fm/$id"
+  fb=$(make_herdr_spawnfake "$dir/fake")
+  log="$dir/log"; : > "$log"
+  out=$( FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 PATH="$fb:$PATH" \
+    FM_HERDR_LOG="$log" FM_FAKE_WS_LABEL=firstmate FM_FAKE_PANE_PATH="$wt" \
+    FM_FAKE_RENAME_EXIT="$rename_exit" \
+    FM_BACKEND_HERDR_NAME_INTERVAL=0 FM_BACKEND_HERDR_NAME_ATTEMPTS=2 \
+    HERDR_SESSION=fmtest \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" "sh -c 'echo spawned'" \
+      --mode no-mistakes --yolo off --backend herdr 2>&1 )
+  rc=$?
+  printf '%s|%s|%s\n' "$log" "${out//$'\n'/ }" "$rc"
+}
+
+test_spawn_names_the_herdr_agent_after_its_task() {
+  local rec log out rc calls
+  rec=$(run_herdr_spawn named)
+  IFS='|' read -r log out rc <<EOF
+$rec
+EOF
+  expect_code 0 "$rc" "the herdr crewmate spawn should succeed: $out"
+  assert_contains "$out" "spawned spawnname-named" "the spawn did not report success"
+  calls=$(rename_calls "$log")
+  assert_contains "$calls" $'\x1f''agent'$'\x1f''rename'$'\x1f''w1:p2'$'\x1f''fm-spawnname-named' \
+    "the spawn did not name its worker's agent after the task"
+  pass "fm-spawn.sh: a herdr crewmate spawn names its agent fm-<task-id> on the pane it just launched"
+}
+
+test_spawn_survives_a_rename_that_never_lands() {
+  local rec log out rc calls
+  rec=$(run_herdr_spawn quiet-fail 1)
+  IFS='|' read -r log out rc <<EOF
+$rec
+EOF
+  expect_code 0 "$rc" "a failed sidebar rename must not fail the spawn: $out"
+  assert_contains "$out" "spawned spawnname-quiet-fail" "a failed sidebar rename must not stop the spawn reporting success"
+  assert_not_contains "$out" "rename" "a failed sidebar rename must not add noise to the spawn's own report"
+  calls=$(rename_calls "$log")
+  [ "$(printf '%s\n' "$calls" | grep -c .)" = 2 ] \
+    || fail "a failed spawn-time rename must stop at its configured attempt budget, got: $calls"
+  pass "fm-spawn.sh: a herdr agent rename that never lands is bounded and never fails the spawn"
+}
+
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
@@ -4372,3 +4565,11 @@ test_wait_transition_stream_absorb_clears_then_timeout
 test_wait_transition_reader_failure_returns_2
 test_wait_transition_bad_ack_returns_2_and_cleans_up
 test_wait_transition_clean_timeout_returns_1
+test_agent_name_uses_the_task_tab_form_for_workers
+test_agent_name_uses_the_home_form_for_a_secondmate
+test_name_agent_renames_the_exact_pane_once_when_the_agent_is_registered
+test_name_agent_retries_until_the_harness_registers_its_agent
+test_name_agent_gives_up_silently_within_a_bounded_window
+test_name_agent_refuses_an_unparseable_target_or_empty_name
+test_spawn_names_the_herdr_agent_after_its_task
+test_spawn_survives_a_rename_that_never_lands

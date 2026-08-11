@@ -2676,6 +2676,15 @@ if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   fi
 fi
 
+# Name this worker in herdr's agents sidebar, so the captain sees one entry per
+# task there instead of an indistinguishable row per worker. Runs last, after
+# the launch key and every delivery confirmation, because it is pure
+# presentation: it never gates the spawn, its retry window is bounded, and
+# nothing ever reads the name back (bin/backends/herdr.sh "agent naming").
+if [ "$BACKEND" = herdr ]; then
+  fm_backend_herdr_name_agent_best_effort "$T" "$(fm_backend_herdr_agent_name "$KIND" "$ID")"
+fi
+
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
 echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
