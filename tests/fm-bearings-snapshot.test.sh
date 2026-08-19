@@ -2,8 +2,8 @@
 # Behavior tests for the bearings projection wrapper over fm-fleet-snapshot.sh.
 # Covers the output/token bound, TOON/JSON parity, the local-only default (zero
 # GitHub/network calls), the --include-prs opt-in path, graceful degradation on a
-# partial PR-fetch failure, end-to-end unresolved-decision durability, and current
-# report pointers.
+# partial PR-fetch failure, end-to-end unresolved-decision durability, current
+# report pointers, and rendering a backlog past the kernel's single-argument cap.
 set -u
 
 # shellcheck source=tests/lib.sh

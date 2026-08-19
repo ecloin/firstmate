@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Behavior tests for the read-only fleet snapshot and its wide Markdown
-# rendering. The default captain sidebar is covered by tests/fm-fleet-view.test.sh.
+# rendering, including survival of a backlog past the kernel's single-argument
+# cap and the shared fm_jq contract in bin/fm-jq-lib.sh that keeps such values
+# off argv. The default captain sidebar is covered by tests/fm-fleet-view.test.sh.
 set -u
 
 # shellcheck source=tests/lib.sh
