@@ -24,9 +24,9 @@
 #   fm_jq <name> <json> [<name> <json> ...] -- <jq-arg>... <filter>
 #   - at least one bound value is required, and the filter must be the last
 #     argument; everything after -- is passed to jq verbatim.
-#   - pass -n among the jq arguments: stdin now carries the bound values, so a
-#     call site that previously read its input from stdin must bind that input
-#     here as well.
+#   - -n is required among the jq arguments and is enforced, not merely
+#     documented: stdin carries the bound values, so a call site that previously
+#     read its input from stdin must bind that input here as well.
 #   - each <name> must be a jq identifier, because it is interpolated into the
 #     filter.
 #
@@ -38,7 +38,7 @@ fm_jq_text() {  # <text> - JSON-encode text of any size
 }
 
 fm_jq() {  # <name> <json> [<name> <json> ...] -- <jq-arg>... <filter>
-  local names=() docs=() prelude='' filter i
+  local names=() docs=() prelude='' filter i arg skip=0 null_input=0
   while [ "$#" -gt 0 ] && [ "$1" != '--' ]; do
     case "$1" in
       '' | *[!a-zA-Z0-9_]* | [!a-zA-Z_]*)
@@ -65,6 +65,27 @@ fm_jq() {  # <name> <json> [<name> <json> ...] -- <jq-arg>... <filter>
   shift
   if [ "${#names[@]}" -eq 0 ] || [ "$#" -lt 1 ]; then
     printf 'fm_jq: needs at least one bound value and a jq filter\n' >&2
+    return 2
+  fi
+  # Without -n jq eats the first bound document as `.`, which would shift every
+  # binding by one. Refuse that up front instead of leaving it to the input-count
+  # assertion, whose off-by-one message reads like a truncated value.
+  for arg in "${@:1:$#-1}"; do
+    if [ "$skip" -gt 0 ]; then
+      skip=$((skip - 1))
+      continue
+    fi
+    case "$arg" in
+      --arg | --argjson | --slurpfile | --rawfile) skip=2 ;;
+      --indent | --from-file | -f | -L) skip=1 ;;
+      --args | --jsonargs) break ;;
+      --null-input) null_input=1 ;;
+      --*) ;;
+      -?*) case "${arg#-}" in *n*) null_input=1 ;; esac ;;
+    esac
+  done
+  if [ "$null_input" -eq 0 ]; then
+    printf 'fm_jq: -n is required; fm_jq owns jq stdin to carry the bound values\n' >&2
     return 2
   fi
   for i in "${!names[@]}"; do

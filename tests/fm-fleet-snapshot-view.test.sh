@@ -9,6 +9,9 @@ set -u
 
 SNAPSHOT="$ROOT/bin/fm-fleet-snapshot.sh"
 VIEW="$ROOT/bin/fm-fleet-view.sh"
+# shellcheck source=bin/fm-jq-lib.sh
+# shellcheck disable=SC1091
+. "$ROOT/bin/fm-jq-lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-fleet-snapshot)
 
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
@@ -190,6 +193,34 @@ test_oversized_backlog_still_snapshots_completely() {
   printf '%s' "$summary" | jq -e '.schema == "fm-secondmate-home-summary.v1"' >/dev/null \
     || fail "oversized-backlog home summary must be valid JSON of the expected schema"
   pass "an oversized backlog still snapshots completely through stdin-bound jq values"
+}
+
+# fm_jq owns jq's stdin to carry the bound values, so -n is not optional: without
+# it jq consumes the first bound document as `.` and every binding shifts by one.
+# The library must refuse that call outright rather than let it fail later as a
+# short-input count.
+test_fm_jq_requires_null_input() {
+  local out rc
+  # shellcheck disable=SC2016 # jq owns every $ expression in this literal program.
+  out=$( { fm_jq backlog '{"a":1}' -- '$backlog.a'; } 2>&1 )
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "fm_jq must refuse a call that omits -n, got rc $rc: $out"
+  assert_contains "$out" "-n is required" "fm_jq must name the missing -n contract"
+  # shellcheck disable=SC2016 # jq owns every $ expression in this literal program.
+  out=$(fm_jq backlog '{"a":1}' -- -n '$backlog.a') \
+    || fail "fm_jq must accept the same call once -n is present"
+  [ "$out" = "1" ] || fail "fm_jq bound the wrong value with -n present: $out"
+  # shellcheck disable=SC2016 # jq owns every $ expression in this literal program.
+  out=$(fm_jq backlog '{"a":"x"}' -- -rn '$backlog.a') \
+    || fail "fm_jq must accept -n folded into a short-flag cluster"
+  [ "$out" = "x" ] || fail "fm_jq mishandled a clustered -rn: $out"
+  # An option value that merely looks like a flag must not satisfy the contract.
+  # shellcheck disable=SC2016 # jq owns every $ expression in this literal program.
+  out=$( { fm_jq backlog '{"a":1}' -- --arg pad -n '$backlog.a'; } 2>&1 )
+  rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "an --arg value that looks like -n must not satisfy the contract, got rc $rc: $out"
+  pass "fm_jq refuses a call without -n instead of silently shifting its bindings"
 }
 
 test_empty_fleet_json() {
@@ -839,6 +870,7 @@ test_parked_scout_decision_stays_pending() {
   pass "a scout still parked at a decision stays pending (terminal clear does not over-fire)"
 }
 
+test_fm_jq_requires_null_input
 test_empty_fleet_json
 test_fixture_snapshot_json
 test_oversized_backlog_still_snapshots_completely

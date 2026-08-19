@@ -425,7 +425,6 @@ MODEL=$(fm_jq snap "$SNAP" candidate_prs "$CANDIDATE_PRS" -- \
        | select(($all_reports == 1) or (($rel_ids | index($r.id)) != null))
        | {id, path} ]) as $reports_all
   | ([ .tasks[] | select(.kind != "secondmate" and .pr.url != null and .pr.source == "meta") | {id, url:.pr.url} ]) as $recorded_prs_all
-  | . as $snap
   | {
       schema: "fm-bearings.v1",
       home: $home,
