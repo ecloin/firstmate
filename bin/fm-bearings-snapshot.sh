@@ -56,6 +56,8 @@
 #   -h,--help        usage
 #
 # Output contract: `fm-bearings.v1`. Read-only; no locks, no mutation, no reports.
+# The canonical snapshot and the accumulated PR rows reach jq through fm_jq
+# (bin/fm-jq-lib.sh) rather than argv, which caps one argument at 128 KiB.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,6 +65,9 @@ FLEET="$SCRIPT_DIR/fm-fleet-snapshot.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-jq-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-jq-lib.sh"  # fm_jq: the single owner of unbounded jq values
 
 # Bounds (overridable for tests / large fleets).
 FM_BEARINGS_LANDED=${FM_BEARINGS_LANDED:-6}
@@ -252,7 +257,8 @@ EOF
       cnt=$(printf '%s' "$repo_rows" | jq 'length')
       [ "$returned" -gt "$FM_BEARINGS_PR_LIMIT" ] && ncapped=$((ncapped + 1))
       npr=$((npr + cnt))
-      rows=$(jq -n --argjson a "$rows" --argjson b "$repo_rows" '$a + $b')
+      # shellcheck disable=SC2016 # jq owns every $ expression in this literal program.
+      rows=$(fm_jq a "$rows" b "$repo_rows" -- -n '$a + $b')
     done
     PR_REPOS_SHOWN=$nrepos
     PR_ROWS_CAPPED=$ncapped
@@ -271,7 +277,9 @@ EOF
 fi
 
 # --- projection: canonical snapshot -> fm-bearings.v1 model (JSON) ----------
-MODEL=$(printf '%s' "$SNAP" | jq \
+# shellcheck disable=SC2016 # jq owns every $ expression in this literal program.
+MODEL=$(fm_jq snap "$SNAP" candidate_prs "$CANDIDATE_PRS" -- \
+  -n \
   --arg home "$HOME_LABEL" \
   --arg now "$NOW" \
   --arg prs "$PR_STATUS" \
@@ -297,9 +305,9 @@ MODEL=$(printf '%s' "$SNAP" | jq \
   --argjson pr_repos_total "$PR_REPOS_TOTAL" \
   --argjson pr_repos_shown "$PR_REPOS_SHOWN" \
   --argjson pr_rows_capped "$PR_ROWS_CAPPED" \
-  --argjson pr_rows_min_total "$PR_ROWS_MIN_TOTAL" \
-  --argjson candidate_prs "$CANDIDATE_PRS" '
-  def trunc($n): if . == null then null else
+  --argjson pr_rows_min_total "$PR_ROWS_MIN_TOTAL" '
+  $snap
+  | def trunc($n): if . == null then null else
     (tostring | gsub("\\s+"; " ") | if (length > $n) then (.[:$n] + "…") else . end) end;
   def round_robin_landed($n):
     . as $groups

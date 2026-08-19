@@ -133,6 +133,65 @@ EOF
     "mode=ship"
 }
 
+# A grown backlog must not break the snapshot. The kernel caps one execve
+# argument at MAX_ARG_STRLEN (128 KiB on Linux) independently of the much larger
+# total ARG_MAX, so passing the parsed backlog to jq on argv made every snapshot
+# in a real home fail with "Argument list too long". The fixture is deliberately
+# far past that cap, and the assertions check completeness: every generated row
+# survives, including the last one and its body, so nothing may be sampled,
+# capped, or truncated to stay under a limit.
+test_oversized_backlog_still_snapshots_completely() {
+  local home fakebin out rows i big_bytes json_bytes summary
+  rows=1400
+  home=$(make_home oversized-backlog)
+  mkdir -p "$home/projects/live-worktree"
+  {
+    printf '## In flight\n'
+    printf -- '- [ ] live-ship - Live Ship (repo: alpha) (kind: ship) (since 2026-07-11)\n'
+    printf '\n## Queued\n'
+    i=1
+    while [ "$i" -le "$rows" ]; do
+      printf -- '- [ ] queued-%04d - Queued item %04d with a long descriptive title so the parsed backlog grows well past the single-argument cap (repo: alpha) (kind: ship) (since 2026-07-11)\n' "$i" "$i"
+      printf '  Body detail %04d retained for bearings, padded so the parsed record set is several times the single-argument cap.\n' "$i"
+      i=$((i + 1))
+    done
+    printf '\n## Done\n'
+  } > "$home/data/backlog.md"
+  big_bytes=$(LC_ALL=C wc -c < "$home/data/backlog.md" | tr -d ' ')
+  [ "$big_bytes" -gt 262144 ] \
+    || fail "fixture backlog must be comfortably past the 128 KiB single-argument cap, got $big_bytes bytes"
+  fm_write_meta "$home/state/live-ship.meta" \
+    "window=firstmate:fm-live-ship" \
+    "worktree=$home/projects/live-worktree" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  printf 'working: implementing\n' > "$home/state/live-ship.status"
+  fakebin=$(make_fakebin "$home")
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json) \
+    || fail "snapshot must survive a backlog past the single-argument cap"
+  printf '%s' "$out" | jq -e . >/dev/null || fail "oversized-backlog snapshot must be valid JSON"
+  json_bytes=$(printf '%s' "$out" | LC_ALL=C wc -c | tr -d ' ')
+  [ "$json_bytes" -gt 131072 ] \
+    || fail "oversized-backlog snapshot output is implausibly small: $json_bytes bytes"
+  printf '%s' "$out" | jq -e --argjson rows "$rows" '
+    .schema == "fm-fleet-snapshot.v1"
+      and ([.backlog.records[] | select(.state == "queued" and .structured)] | length) == $rows
+      and (.tasks | length) == 1
+      and .main_inventory.valid == true
+  ' >/dev/null || fail "oversized-backlog snapshot dropped rows or inventory checks"
+  printf '%s' "$out" | jq -e --arg id "queued-$(printf '%04d' "$rows")" '
+    .backlog.records[] | select(.id == $id)
+    | .state == "queued" and (.body_excerpt | startswith("Body detail"))
+  ' >/dev/null || fail "the last oversized-backlog row and its body must survive intact"
+  summary=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --secondmate-home-summary) \
+    || fail "the structured home summary must survive the same oversized backlog"
+  printf '%s' "$summary" | jq -e '.schema == "fm-secondmate-home-summary.v1"' >/dev/null \
+    || fail "oversized-backlog home summary must be valid JSON of the expected schema"
+  pass "an oversized backlog still snapshots completely through stdin-bound jq values"
+}
+
 test_empty_fleet_json() {
   local home out view
   home=$(make_home empty)
@@ -782,6 +841,7 @@ test_parked_scout_decision_stays_pending() {
 
 test_empty_fleet_json
 test_fixture_snapshot_json
+test_oversized_backlog_still_snapshots_completely
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness
 test_event_hints_follow_reconciled_current_state

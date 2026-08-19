@@ -211,6 +211,41 @@ EOF
 
 # This is the Domain Alpha failure shape exactly: the structured home says Phase 7 is Done
 # and no child is active, so the stale parent event must never become Underway.
+# The bearings digest reads the canonical snapshot, so a backlog past the kernel's
+# 128 KiB single-argument cap used to break it outright. Both output forms must
+# still render, and the queued gate rows must reflect the whole backlog.
+test_oversized_backlog_still_renders_bearings() {
+  local home fakebin toon json rows i bytes
+  rows=1400
+  home=$(make_home oversized-bearings)
+  {
+    printf '## In flight\n'
+    printf '\n## Queued\n'
+    i=1
+    while [ "$i" -le "$rows" ]; do
+      printf -- '- [ ] queued-%04d - Queued item %04d with a long descriptive title so the parsed backlog grows well past the single-argument cap (repo: alpha) (kind: ship) (since 2026-07-11)\n' "$i" "$i"
+      printf '  Body detail %04d retained for bearings, padded so the parsed record set is several times the single-argument cap.\n' "$i"
+      i=$((i + 1))
+    done
+    printf '\n## Done\n'
+  } > "$home/data/backlog.md"
+  bytes=$(LC_ALL=C wc -c < "$home/data/backlog.md" | tr -d ' ')
+  [ "$bytes" -gt 262144 ] \
+    || fail "fixture backlog must be comfortably past the 128 KiB single-argument cap, got $bytes bytes"
+  fakebin=$(make_fakebin "$home"); : > "$home/net.log"
+  json=$(run "$home" "$fakebin" --json) \
+    || fail "bearings must survive a backlog past the single-argument cap"
+  printf '%s' "$json" | jq -e --argjson rows "$rows" '
+    .schema == "fm-bearings.v1" and (.gates | length) > 0
+      and (.omitted | any(.[]; .surface | startswith("gates showing 20 of")))
+  ' >/dev/null || fail "oversized-backlog bearings model lost its queued gates: $json"
+  toon=$(run "$home" "$fakebin") \
+    || fail "bearings TOON rendering must survive the same oversized backlog"
+  assert_contains "$toon" "schema: fm-bearings.v1" "oversized-backlog bearings must render TOON"
+  [ ! -s "$home/net.log" ] || fail "oversized-backlog bearings made a network call"
+  pass "an oversized backlog still renders both bearings forms"
+}
+
 test_domain_alpha_stale_parent_event_does_not_become_current_work() {
   local home mate fakebin json canonical
   home=$(make_home domain-alpha-parent)
@@ -1929,4 +1964,5 @@ test_perl_fallback_bounds_github_call
 test_section_caps_and_expansion_flags
 test_pr_repository_cap_and_expansion
 test_per_repository_pr_cap_is_disclosed
+test_oversized_backlog_still_renders_bearings
 test_projection_and_toon_fail_closed
